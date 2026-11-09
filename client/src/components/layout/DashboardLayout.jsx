@@ -1,0 +1,8 @@
+import { useState } from 'react'
+import Navbar from './Navbar'
+import Sidebar from './Sidebar'
+
+export default function DashboardLayout({ children }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  return <div className="dashboard-layout"><Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} /><div className="main-area"><Navbar onMenu={() => setSidebarOpen(true)} />{children}</div></div>
+}
