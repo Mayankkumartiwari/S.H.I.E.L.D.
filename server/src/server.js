@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-
+import {redisClient}from './config/redis.config.js'
 dotenv.config();
 
 import app from './app.js';
@@ -14,6 +14,8 @@ const startServer = async () => {
     app.listen(port, () => {
       console.log(`CampusBuzz server running on port ${port}.`);
     });
+   await redisClient.connect();
+   console.log("Redis connected Successfully");
   } catch (error) {
     console.error('Server startup failed:', error.message);
     process.exit(1);
