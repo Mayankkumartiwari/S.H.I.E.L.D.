@@ -734,6 +734,29 @@
 .chat-form .input {
   flex: 1;
 }
+.chat-textarea {
+  min-height: 48px;
+  resize: vertical;
+}
+.message-time {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.typing-indicator {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.message-error {
+  border-color: var(--danger);
+}
+.retry-button {
+  display: block;
+  margin-top: 10px;
+  color: var(--accent);
+  font-weight: 700;
+}
 .modal-backdrop {
   position: fixed;
   z-index: 40;

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "40df2f93-328c-4c3b-a1f0-36d57b2be78a",
     "name": "S.H.I.E.L.D. API",
-    "description": "Postman collection for the Express API. Set baseUrl and run the health check first. For sign-up, configure SMTP, register, check the verification email, then verify. Successful login and verification save the returned JWT as the token collection variable. Admin endpoints require a configured admin account.",
+    "description": "Postman collection for the Express API. Set baseUrl and run the health check first. For sign-up, configure SMTP, register, check the verification email, then verify. Successful login and verification save the returned JWT as the token collection variable. The authenticated campus assistant uses OpenAI through the Express backend. Admin endpoints require a configured admin account.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -58,6 +58,11 @@
     },
     {
       "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conversationId",
       "value": "",
       "type": "string"
     }
@@ -405,10 +410,29 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"question\": \"Where is the library?\"\n}"
+              "raw": "{\n  \"message\": \"Where is the library?\",\n  \"conversationHistory\": []\n}"
             },
             "url": "{{baseUrl}}/api/assistant/chat"
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Assistant request succeeds', function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('Assistant response contains a reply', function () {",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.data.reply).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (body.data && body.data.conversationId) pm.collectionVariables.set('conversationId', body.data.conversationId);"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
