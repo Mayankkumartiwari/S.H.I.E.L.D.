@@ -155,8 +155,8 @@ export function LoginPage() {
           </a>
         </label>
         {error && <p className="form-error">{error}</p>}
-        <Button type="submit" disabled={loading}>
-          {loading ? "Signing in..." : "Sign in"}
+        <Button type="submit" loading={loading} loadingText="Signing in...">
+          Sign in
         </Button>
       </form>
       <div className="auth-footer">
@@ -166,6 +166,8 @@ export function LoginPage() {
   );
 }
 
+
+//register and verify otp pages are in this file, but the rest of the code is in AppRoutes.jsx.
 export function RegisterPage() {
   const { signup } = useAuth();
   const toast = useToast();
@@ -312,8 +314,8 @@ export function RegisterPage() {
           .
         </label>
         {error && <p className="form-error">{error}</p>}
-        <Button type="submit" disabled={loading}>
-          {loading ? "Creating account..." : "Create account"}
+        <Button type="submit" loading={loading} loadingText="Creating account...">
+          Create account
         </Button>
       </form>
       <div className="auth-footer">
@@ -409,8 +411,8 @@ export function VerifyOtpPage() {
           ))}
         </div>
         {error && <p className="form-error">{error}</p>}
-        <Button type="submit" disabled={loading || code.join("").length !== 6}>
-          {loading ? "Verifying..." : "Verify account"}
+        <Button type="submit" loading={loading} disabled={code.join("").length !== 6} loadingText="Verifying...">
+          Verify account
         </Button>
       </form>
       <button className="text-button" disabled={seconds > 0} onClick={resend}>
