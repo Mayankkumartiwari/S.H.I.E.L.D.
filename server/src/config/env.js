@@ -1,18 +1,45 @@
-import 'dotenv/config'
-const required = ['MONGODB_URI', 'JWT_SECRET']
+import 'dotenv/config';
+
+const mongoUri =
+  process.env.MONGODB_URI ||
+  process.env.MONGO_URI ||
+  process.env.mongoUri ||
+  'mongodb://127.0.0.1:27017/shield';
+const jwtSecret =
+  process.env.JWT_SECRET ||
+  process.env.JWT_KEY ||
+  (process.env.NODE_ENV === 'production' ? '' : 'development-only-change-this-jwt-secret');
+
 if (process.env.NODE_ENV === 'production') {
-  const missing = required.filter((key) => !process.env[key])
-  if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`)
+  const missing = [];
+  if (!process.env.MONGODB_URI && !process.env.MONGO_URI) missing.push('MONGODB_URI');
+  if (!jwtSecret || jwtSecret.length < 32 || /replace-with|your_jwt_secret/i.test(jwtSecret)) {
+    missing.push('JWT_SECRET (a non-placeholder secret of at least 32 characters)');
+  }
+  if (!process.env.CLIENT_URL) missing.push('CLIENT_URL');
+  if (!process.env.OTP_DELIVERY_URL) missing.push('OTP_DELIVERY_URL');
+  if (!process.env.OTP_DELIVERY_TOKEN) missing.push('OTP_DELIVERY_TOKEN');
+  if (missing.length) {
+    throw new Error(`Missing or invalid production environment variables: ${missing.join(', ')}`);
+  }
 }
 
- export const env = {
+export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 5000),
-  mongoUri: process.env.mongoUri || 'mongodb://127.0.0.1:27017/lifeos',
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  REDIS_PASS:process.env.REDIS_PASS,
-  REDIS_PORT:process.env.REDIS_PORT,
-  REDIS_HOST:process.env.REDIS_HOST,
+  mongoUri,
+  jwtSecret,
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  clientOrigins: (process.env.CLIENT_URL || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  otpDeliveryUrl: process.env.OTP_DELIVERY_URL || '',
+  otpDeliveryToken: process.env.OTP_DELIVERY_TOKEN || '',
   aimlServiceUrl: process.env.AIML_SERVICE_URL || 'http://localhost:8000',
-  JWT_KEY:process.env.JWT_KEY
-}
+  bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase() || '',
+  bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD || '',
+  bootstrapAdminName: process.env.BOOTSTRAP_ADMIN_NAME || 'Campus Administrator',
+  bootstrapAdminDepartment: process.env.BOOTSTRAP_ADMIN_DEPARTMENT || 'Student Affairs',
+  bootstrapAdminStudentId: process.env.BOOTSTRAP_ADMIN_STUDENT_ID || 'administrator',
+};

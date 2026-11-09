@@ -18,7 +18,7 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
-      index: true,
+      maxlength: 254,
     },
 
     collegeId: {
@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       unique: true,
       trim: true,
-      index: true,
+      maxlength: 64,
     },
 
     passwordHash: {
@@ -89,6 +89,15 @@ const userSchema = new mongoose.Schema(
       default: "active",
       index: true,
     },
+    verified: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
 
     passwordChangedAt: {
       type: Date,
@@ -111,4 +120,4 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-export const User = mongoose.model("User", userSchema);
+export const User = mongoose.models.User || mongoose.model("User", userSchema);

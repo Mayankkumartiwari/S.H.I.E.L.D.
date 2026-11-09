@@ -1,238 +1,221 @@
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { env } from '../config/env.js';
+import { RegistrationChallenge } from '../models/registrationChallenge.models.js';
+import { RevokedToken } from '../models/revokedToken.models.js';
+import { User } from '../models/user.models.js';
+import { deliverOtp } from '../services/otpDelivery.service.js';
+import { ApiError } from '../utils/apiError.js';
+import { getPublicUser, sendSuccess } from '../utils/apiResponse.js';
 
-import { User } from "../models/user.model.js";
-import { env } from "../config/env.js";
-import { redisClient } from "../config/redis.config.js";
+const otpExpiresInMs = 10 * 60 * 1000;
+const registrationCookieName = 'shield_registration';
+const sessionCookieName = 'shield_token';
+
+const digest = (value, purpose) =>
+  createHmac('sha256', env.jwtSecret).update(`${purpose}:${value}`).digest('hex');
+
+const registrationCookieOptions = () => ({
+  httpOnly: true,
+  secure: env.nodeEnv === 'production',
+  sameSite: 'lax',
+  path: '/api/auth',
+  maxAge: otpExpiresInMs,
+});
+
+const sessionCookieOptions = () => ({
+  httpOnly: true,
+  secure: env.nodeEnv === 'production',
+  sameSite: 'lax',
+  path: '/',
+});
+
+const setSession = (res, user) => {
+  const tokenId = randomBytes(16).toString('hex');
+  const token = jwt.sign({ sub: user._id.toString(), jti: tokenId }, env.jwtSecret, {
+    expiresIn: env.jwtExpiresIn,
+  });
+  const expiresAt = new Date(jwt.decode(token).exp * 1000);
+  res.cookie(sessionCookieName, token, {
+    ...sessionCookieOptions(),
+    maxAge: Math.max(0, expiresAt.getTime() - Date.now()),
+  });
+  return token;
+};
+
+const clearRegistrationCookie = (res) => res.clearCookie(registrationCookieName, {
+  httpOnly: true,
+  secure: env.nodeEnv === 'production',
+  sameSite: 'lax',
+  path: '/api/auth',
+});
+
+const getChallenge = async (req, res) => {
+  const rawToken = req.cookies?.[registrationCookieName] || req.body?.registrationToken;
+  if (!rawToken) throw new ApiError(400, 'No registration is waiting for verification.', 'REGISTRATION_NOT_FOUND');
+  const challenge = await RegistrationChallenge.findOne({
+    registrationTokenHash: digest(rawToken, 'registration'),
+  }).select('+passwordHash +otpHash +registrationTokenHash');
+  if (!challenge || challenge.expiresAt <= new Date()) {
+    if (challenge) await challenge.deleteOne();
+    clearRegistrationCookie(res);
+    throw new ApiError(400, 'The verification session has expired. Please register again.', 'REGISTRATION_EXPIRED');
+  }
+  return challenge;
+};
+
+const createOtp = async () => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const otpHash = digest(code, 'otp');
+    if (!(await RegistrationChallenge.exists({ otpHash, expiresAt: { $gt: new Date() } }))) {
+      return { code, otpHash };
+    }
+  }
+  throw new ApiError(503, 'Unable to start verification. Please try again.', 'OTP_GENERATION_FAILED');
+};
 
 export const register = async (req, res) => {
-  try {
-    const {
-      name,
-      emailId,
-      collegeId,
-      department,
-      password,
-    } = req.body;
+  const { name, email, studentId, department, password } = req.body;
+  const emailId = email.toLowerCase();
+  const collegeId = studentId.trim();
 
-    // Check required fields
-    if (
-      !name ||
-      !emailId ||
-      !collegeId ||
-      !department ||
-      !password
-    ) {
-      return res.status(400).json({
-        message: "All fields are required",
-      });
-    }
-
-    // Password validation
-    if (password.length < 4 || password.length > 15) {
-      return res.status(400).json({
-        message: "Password must be between 4 and 15 characters",
-      });
-    }
-
-    // Check existing email
-    const existingEmail = await User.findOne({ emailId });
-
-    if (existingEmail) {
-      return res.status(409).json({
-        message: "Email already registered",
-      });
-    }
-
-    // Check existing college ID
-    const existingCollegeId = await User.findOne({ collegeId });
-
-    if (existingCollegeId) {
-      return res.status(409).json({
-        message: "College ID already registered",
-      });
-    }
-
-    // Hash password
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    // Create user
-    const user = await User.create({
-      name,
-      emailId,
-      collegeId,
-      department,
-      passwordHash,
-    });
-
-    // Create JWT
-    const token = jwt.sign(
-      {
-        _id: user._id,
-        emailId: user.emailId,
-        role: user.role,
-      },
-      env.JWT_KEY,
-      {
-        expiresIn: "1h",
-      }
-    );
-
-    // Store token in cookie
-    res.cookie("token", token, {
-      httpOnly: true,
-      maxAge: 60 * 60 * 1000,
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-    });
-
-    return res.status(201).json({
-      user: {
-        _id: user._id,
-        name: user.name,
-        emailId: user.emailId,
-        collegeId: user.collegeId,
-        department: user.department,
-        role: user.role,
-      },
-      message: "Registration successful",
-    });
-
-  } catch (error) {
-    console.error("Register error:", error);
-
-    return res.status(500).json({
-      message: "Registration failed",
-      error: error.message,
-    });
+  if (await User.exists({ $or: [{ emailId }, { collegeId }] })) {
+    throw new ApiError(409, 'An account with this email or student ID already exists.', 'ACCOUNT_EXISTS');
   }
+
+  const conflictingChallenge = await RegistrationChallenge.findOne({
+    $or: [{ emailId }, { collegeId }],
+  });
+  if (conflictingChallenge && conflictingChallenge.emailId !== emailId) {
+    throw new ApiError(409, 'A registration is already using this student ID.', 'STUDENT_ID_PENDING');
+  }
+
+  const { code, otpHash } = await createOtp();
+  const registrationToken = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + otpExpiresInMs);
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  const challenge = await RegistrationChallenge.findOneAndUpdate(
+    { emailId },
+    {
+      $set: {
+        emailId,
+        collegeId,
+        name: name.trim(),
+        department: department.trim(),
+        passwordHash,
+        otpHash,
+        registrationTokenHash: digest(registrationToken, 'registration'),
+        expiresAt,
+        lastOtpSentAt: new Date(),
+        attempts: 0,
+      },
+    },
+    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
+  );
+
+  try {
+    await deliverOtp({ email: emailId, code });
+  } catch (error) {
+    await challenge.deleteOne();
+    throw error;
+  }
+
+  res.cookie(registrationCookieName, registrationToken, registrationCookieOptions());
+  const data = { email: emailId, expiresAt, registrationToken };
+  if (env.nodeEnv !== 'production' && !env.otpDeliveryUrl) data.demoOtp = code;
+  return sendSuccess(res, 202, 'Registration started. Verify your email to activate the account.', data);
 };
 
+export const verifySignup = async (req, res) => {
+  const challenge = await getChallenge(req, res);
+  const suppliedHash = Buffer.from(digest(req.body.code, 'otp'), 'hex');
+  const expectedHash = Buffer.from(challenge.otpHash, 'hex');
+  const validCode =
+    suppliedHash.length === expectedHash.length && timingSafeEqual(suppliedHash, expectedHash);
 
-// =========================
-// LOGIN
-// =========================
+  if (!validCode) {
+    challenge.attempts += 1;
+    if (challenge.attempts >= 5) {
+      await challenge.deleteOne();
+      clearRegistrationCookie(res);
+      throw new ApiError(429, 'Too many invalid verification attempts. Please register again.', 'OTP_ATTEMPTS_EXCEEDED');
+    }
+    await challenge.save();
+    throw new ApiError(400, 'That verification code is not valid.', 'INVALID_OTP');
+  }
+
+  const user = await User.create({
+    name: challenge.name,
+    emailId: challenge.emailId,
+    collegeId: challenge.collegeId,
+    department: challenge.department,
+    passwordHash: challenge.passwordHash,
+    role: 'student',
+    status: 'active',
+    verified: true,
+    lastLoginAt: new Date(),
+  });
+  await challenge.deleteOne();
+  clearRegistrationCookie(res);
+  const token = setSession(res, user);
+  return sendSuccess(res, 200, 'Email verified successfully.', {
+    user: getPublicUser(user),
+    token,
+  });
+};
+
+export const resendOtp = async (req, res) => {
+  const challenge = await getChallenge(req, res);
+  const waitMs = 30_000 - (Date.now() - challenge.lastOtpSentAt.getTime());
+  if (waitMs > 0) {
+    throw new ApiError(429, 'Please wait before requesting another verification code.', 'OTP_RESEND_TOO_SOON', {
+      retryAfterSeconds: Math.ceil(waitMs / 1000),
+    });
+  }
+
+  const { code, otpHash } = await createOtp();
+  challenge.otpHash = otpHash;
+  challenge.lastOtpSentAt = new Date();
+  challenge.attempts = 0;
+  await challenge.save();
+  await deliverOtp({ email: challenge.emailId, code });
+  const data = { email: challenge.emailId, expiresAt: challenge.expiresAt };
+  if (env.nodeEnv !== 'production' && !env.otpDeliveryUrl) data.demoOtp = code;
+  return sendSuccess(res, 200, 'A new verification code was sent.', data);
+};
+
 export const login = async (req, res) => {
-  try {
-    const { emailId, password } = req.body;
-
-    if (!emailId || !password) {
-      return res.status(400).json({
-        message: "Email and password are required",
-      });
-    }
-
-    // passwordHash has select:false
-    const user = await User.findOne({ emailId })
-      .select("+passwordHash");
-
-    if (!user) {
-      return res.status(401).json({
-        message: "Invalid email or password",
-      });
-    }
-
-    // Compare password
-    const isPasswordCorrect = await bcrypt.compare(
-      password,
-      user.passwordHash
-    );
-
-    if (!isPasswordCorrect) {
-      return res.status(401).json({
-        message: "Invalid email or password",
-      });
-    }
-
-    // Update last login
-    user.lastLoginAt = new Date();
-    await user.save();
-
-    // Create JWT
-    const token = jwt.sign(
-      {
-        _id: user._id,
-        emailId: user.emailId,
-        role: user.role,
-      },
-      env.JWT_KEY,
-      {
-        expiresIn: "1h",
-      }
-    );
-
-    // Store JWT in cookie
-    res.cookie("token", token, {
-      httpOnly: true,
-      maxAge: 60 * 60 * 1000,
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-    });
-
-    return res.status(200).json({
-      user: {
-        _id: user._id,
-        name: user.name,
-        emailId: user.emailId,
-        collegeId: user.collegeId,
-        department: user.department,
-        role: user.role,
-      },
-      message: "Login successful",
-    });
-
-  } catch (error) {
-    console.error("Login error:", error);
-
-    return res.status(500).json({
-      message: "Login failed",
-      error: error.message,
-    });
+  const emailId = req.body.email.toLowerCase();
+  const user = await User.findOne({ emailId }).select('+passwordHash');
+  const passwordMatches = user
+    ? await bcrypt.compare(req.body.password, user.passwordHash)
+    : false;
+  if (!passwordMatches) {
+    throw new ApiError(401, 'Invalid email or password.', 'INVALID_CREDENTIALS');
   }
+  if (!user.verified || user.status !== 'active') {
+    throw new ApiError(403, 'This account cannot sign in.', 'ACCOUNT_UNAVAILABLE');
+  }
+
+  user.lastLoginAt = new Date();
+  await user.save();
+  const token = setSession(res, user);
+  return sendSuccess(res, 200, 'Signed in successfully.', { user: getPublicUser(user), token });
 };
 
-
-// =========================
-// LOGOUT
-// =========================
 export const logout = async (req, res) => {
-  try {
-    const token = req.cookies.token;
-
-    if (!token) {
-      return res.status(401).json({
-        message: "User is not logged in",
-      });
-    }
-
-    // Verify token
-    const payload = jwt.verify(token, env.JWT_KEY);
-
-    // Block token in Redis until its original expiry
-    await redisClient.set(`token:${token}`, "Blocked");
-
-    await redisClient.expireAt(
-      `token:${token}`,
-      payload.exp
-    );
-
-    // Remove cookie
-    res.clearCookie("token", {
-      httpOnly: true,
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-    });
-
-    return res.status(200).json({
-      message: "Logout successful",
-    });
-
-  } catch (error) {
-    console.error("Logout error:", error);
-
-    return res.status(400).json({
-      message: "Logout failed",
-      error: error.message,
-    });
-  }
+  await RevokedToken.create({ jti: req.auth.tokenId, expiresAt: req.auth.expiresAt });
+  res.clearCookie(sessionCookieName, {
+    httpOnly: true,
+    secure: env.nodeEnv === 'production',
+    sameSite: 'lax',
+    path: '/',
+  });
+  return sendSuccess(res, 200, 'Signed out successfully.', null);
 };
+
+export const getCurrentUser = async (req, res) =>
+  sendSuccess(res, 200, 'Current user loaded.', { user: getPublicUser(req.user) });
