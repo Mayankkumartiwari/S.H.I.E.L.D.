@@ -45,6 +45,9 @@ const validateValue = (value, field, rule, source) => {
   }
 
   if (rule.type === 'boolean') {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : value;
+    if (normalized === 'true') return { value: true };
+    if (normalized === 'false') return { value: false };
     if (typeof value !== 'boolean') return { message: `${field} must be a boolean.` };
     return { value };
   }

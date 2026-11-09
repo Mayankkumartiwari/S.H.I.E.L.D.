@@ -23,13 +23,18 @@ test('validation normalizes declared body fields and converts query numbers', as
   assert.deepEqual(request.validated.query, { page: 2 });
 });
 
-test('validation rejects unknown fields and malformed values', async () => {
-  const request = { body: { code: 'abc', unexpected: true } };
+test('validation normalizes boolean query values and rejects unknown fields and malformed values', async () => {
+  const request = {
+    body: { code: 'abc', unexpected: true },
+    query: { includeArchived: 'true', page: '2' },
+  };
   const error = await execute(validate({
     body: { code: { type: 'string', required: true, pattern: /^\d{6}$/ } },
+    query: { includeArchived: { type: 'boolean', required: true }, page: { type: 'number', integer: true, min: 1 } },
   }), request);
 
   assert.equal(error.statusCode, 400);
   assert.equal(error.code, 'VALIDATION_ERROR');
   assert.equal(error.details.length, 2);
+  assert.deepEqual(request.validated.query, { includeArchived: true, page: 2 });
 });
