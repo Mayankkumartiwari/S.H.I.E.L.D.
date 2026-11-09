@@ -1,0 +1,1 @@
+"""Approved campus information."""
