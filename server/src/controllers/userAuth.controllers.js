@@ -5,11 +5,11 @@ import { env } from '../config/env.js';
 import { RegistrationChallenge } from '../models/registrationChallenge.models.js';
 import { RevokedToken } from '../models/revokedToken.models.js';
 import { User } from '../models/user.models.js';
-import { deliverOtp } from '../services/otpDelivery.service.js';
+import { sendOtp } from '../services/mail.service.js';
 import { ApiError } from '../utils/apiError.js';
 import { getPublicUser, sendSuccess } from '../utils/apiResponse.js';
 
-const otpExpiresInMs = 10 * 60 * 1000;
+const otpExpiresInMs = 5 * 60 * 1000;
 const registrationCookieName = 'shield_registration';
 const sessionCookieName = 'shield_token';
 
@@ -117,15 +117,14 @@ export const register = async (req, res) => {
   );
 
   try {
-    await deliverOtp({ email: emailId, code });
+    await sendOtp(emailId, code);
   } catch (error) {
     await challenge.deleteOne();
-    throw error;
+    throw new ApiError(502, 'Unable to send the verification email. Please try again.', 'OTP_DELIVERY_FAILED');
   }
 
   res.cookie(registrationCookieName, registrationToken, registrationCookieOptions());
   const data = { email: emailId, expiresAt, registrationToken };
-  if (env.nodeEnv !== 'production' && !env.otpDeliveryUrl) data.demoOtp = code;
   return sendSuccess(res, 202, 'Registration started. Verify your email to activate the account.', data);
 };
 
@@ -181,9 +180,14 @@ export const resendOtp = async (req, res) => {
   challenge.lastOtpSentAt = new Date();
   challenge.attempts = 0;
   await challenge.save();
-  await deliverOtp({ email: challenge.emailId, code });
+  try {
+    await sendOtp(challenge.emailId, code);
+  } catch (error) {
+    await challenge.deleteOne();
+    clearRegistrationCookie(res);
+    throw new ApiError(502, 'Unable to send the verification email. Please try again.', 'OTP_DELIVERY_FAILED');
+  }
   const data = { email: challenge.emailId, expiresAt: challenge.expiresAt };
-  if (env.nodeEnv !== 'production' && !env.otpDeliveryUrl) data.demoOtp = code;
   return sendSuccess(res, 200, 'A new verification code was sent.', data);
 };
 

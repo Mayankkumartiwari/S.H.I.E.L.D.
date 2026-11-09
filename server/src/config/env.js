@@ -17,8 +17,11 @@ if (process.env.NODE_ENV === 'production') {
     missing.push('JWT_SECRET (a non-placeholder secret of at least 32 characters)');
   }
   if (!process.env.CLIENT_URL) missing.push('CLIENT_URL');
-  if (!process.env.OTP_DELIVERY_URL) missing.push('OTP_DELIVERY_URL');
-  if (!process.env.OTP_DELIVERY_TOKEN) missing.push('OTP_DELIVERY_TOKEN');
+  if (!(process.env.SMTP_USER || process.env.EMAIL)) missing.push('SMTP_USER');
+  if (!process.env.SMTP_PASS) missing.push('SMTP_PASS');
+  if (!process.env.MAIL_FROM_EMAIL && !(process.env.SMTP_USER || process.env.EMAIL)) {
+    missing.push('MAIL_FROM_EMAIL');
+  }
   if (missing.length) {
     throw new Error(`Missing or invalid production environment variables: ${missing.join(', ')}`);
   }
@@ -34,8 +37,12 @@ export const env = {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
-  otpDeliveryUrl: process.env.OTP_DELIVERY_URL || '',
-  otpDeliveryToken: process.env.OTP_DELIVERY_TOKEN || '',
+  smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpSecure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+  smtpUser: process.env.SMTP_USER || process.env.EMAIL || '',
+  mailFromName: process.env.MAIL_FROM_NAME || 'S.H.I.E.L.D.',
+  mailFromEmail: process.env.MAIL_FROM_EMAIL || process.env.SMTP_USER || process.env.EMAIL || '',
   aimlServiceUrl: process.env.AIML_SERVICE_URL || 'http://localhost:8000',
   bootstrapAdminEmail: process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase() || '',
   bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD || '',
